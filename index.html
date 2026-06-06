@@ -13,7 +13,7 @@
 
     <div class="bg-slate-800 text-center py-5 shadow-lg border-b border-slate-700 sticky top-0 z-50">
         <h1 class="text-xl font-bold tracking-wide text-emerald-400">📊 My Crypto Journal</h1>
-        <p class="text-xs text-slate-400 mt-1">100% Private • Local Mobile Database</p>
+        <p class="text-xs text-slate-400 mt-1">100% Private • Type Any Crypto Name</p>
     </div>
 
     <div class="max-w-md mx-auto px-4 mt-4 space-y-4">
@@ -25,14 +25,8 @@
             </div>
             <div class="space-y-3">
                 <div>
-                    <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">क्रिप्टो का नाम (Symbol)</label>
-                    <select id="cryptoSymbol" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-medium text-white focus:outline-none focus:border-emerald-500">
-                        <option value="ADA">Cardano (ADA)</option>
-                        <option value="FET">Artificial Superintelligence Alliance (FET)</option>
-                        <option value="BTC">Bitcoin (BTC)</option>
-                        <option value="ETH">Ethereum (ETH)</option>
-                        <option value="SOL">Solana (SOL)</option>
-                    </select>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">क्रिप्टो का नाम लिखें (E.g. ADA, FET, BTC)</label>
+                    <input type="text" id="cryptoSymbol" placeholder="यहाँ क्रिप्टो का सिंबल टाइप करें..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-medium text-white uppercase focus:outline-none focus:border-emerald-500">
                 </div>
                 <div class="grid grid-cols-2 gap-2">
                     <div>
@@ -105,8 +99,8 @@
     </div>
 
     <script>
-        // Mapping CoinGecko IDs
-        const cgMapping = {
+        // CoinGecko API के लिए कुछ मुख्य ID की पहले से मैपिंग (ताकि डायरेक्ट लोड हो)
+        let coinIdCache = {
             "ADA": "cardano",
             "FET": "artificial-superintelligence-alliance",
             "BTC": "bitcoin",
@@ -115,73 +109,106 @@
         };
 
         let transactions = [];
-        let livePrices = { "ADA": 0, "FET": 0, "BTC": 0, "ETH": 0, "SOL": 0 };
+        let livePrices = {};
         let targetInputs = {};
 
-        // Load data on start
         window.onload = function() {
             document.getElementById('cryptoDate').value = new Date().toISOString().split('T')[0];
             
-            // Load transactions
             const savedTx = localStorage.getItem('my_private_crypto_tx');
             if(savedTx) transactions = JSON.parse(savedTx);
 
-            // Load saved targets
             const savedTargets = localStorage.getItem('my_private_crypto_targets');
             if(savedTargets) targetInputs = JSON.parse(savedTargets);
 
-            // Load saved USD/INR rate
             const savedRate = localStorage.getItem('my_private_usd_inr');
             if(savedRate) document.getElementById('usdInrRate').value = savedRate;
+
+            const savedCache = localStorage.getItem('my_private_coin_ids');
+            if(savedCache) coinIdCache = JSON.parse(savedCache);
 
             fetchLivePrices();
         };
 
-        // Fetch Live Rates
-        function fetchLivePrices() {
-            const ids = Object.values(cgMapping).join(',');
-            const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
+        // सभी यूनिक क्रिप्टोज़ के लाइव रेट्स लाने का डायनेमिक फंक्शन
+        async function fetchLivePrices() {
+            // पोर्टफोलियो में मौजूद सभी यूनिक नाम निकालें
+            let uniqueSymbols = [...new Set(transactions.map(t => t.sym.upperCase || t.sym.toUpperCase()))];
+            
+            if(uniqueSymbols.length === 0) {
+                renderAll();
+                return;
+            }
 
-            fetch(url)
-                .then(res => res.json())
-                .then(data => {
-                    Object.keys(cgMapping).forEach(sym => {
-                        const id = cgMapping[sym];
-                        if(data[id]) {
-                            livePrices[sym] = data[id].usd;
+            // अगर कोई नया सिंबल है जिसकी CoinGecko ID हमें नहीं पता, तो उसे सर्च करेंगे
+            for (let sym of uniqueSymbols) {
+                if (!coinIdCache[sym]) {
+                    try {
+                        let searchRes = await fetch(`https://api.coingecko.com/api/v3/search?query=${sym.toLowerCase()}`);
+                        let searchData = await searchRes.json();
+                        if (searchData.coins && searchData.coins.length > 0) {
+                            // सबसे पहला मैचिंग रिजल्ट ले लेंगे
+                            coinIdCache[sym] = searchData.coins[0].id;
+                        }
+                    } catch (e) {
+                        console.log("Search error for " + sym, e);
+                    }
+                }
+            }
+            localStorage.setItem('my_private_coin_ids', JSON.stringify(coinIdCache));
+
+            // अब सारी ID का इस्तेमाल करके लाइव प्राइस लाएंगे
+            let idsToFetch = uniqueSymbols.map(sym => coinIdCache[sym]).filter(id => id).join(',');
+            
+            if (idsToFetch) {
+                let url = `https://api.coingecko.com/api/v3/simple/price?ids=${idsToFetch}&vs_currencies=usd`;
+                try {
+                    let res = await fetch(url);
+                    let priceData = await res.json();
+                    
+                    uniqueSymbols.forEach(sym => {
+                        let cid = coinIdCache[sym];
+                        if (priceData[cid]) {
+                            livePrices[sym] = priceData[cid].usd;
+                        } else if (!livePrices[sym]) {
+                            livePrices[sym] = 0.0;
                         }
                     });
-                    renderAll();
-                })
-                .catch(err => {
-                    console.log("API Error, using fallback or 0", err);
-                    renderAll();
-                });
+                } catch (err) {
+                    console.log("Price fetch error", err);
+                }
+            }
+
+            renderAll();
         }
 
-        // Add Transaction
+        // नया ट्रांजैक्शन जोड़ने का फंक्शन
         function addTransaction() {
-            const sym = document.getElementById('cryptoSymbol').value;
+            const symInput = document.getElementById('cryptoSymbol').value.trim().toUpperCase();
             const qty = parseFloat(document.getElementById('cryptoQty').value) || 0;
             const price = parseFloat(document.getElementById('cryptoPrice').value) || 0;
             const date = document.getElementById('cryptoDate').value;
 
+            if(!symInput) {
+                alert("कृपया क्रिप्टो का नाम लिखें!");
+                return;
+            }
             if(qty <= 0 || price <= 0) {
-                alert("Please enter valid quantity and price.");
+                alert("कृपया सही क्वांटिटी और प्राइस भरें।");
                 return;
             }
 
-            transactions.push({ sym, qty, price, date });
+            transactions.push({ sym: symInput, qty, price, date });
             localStorage.setItem('my_private_crypto_tx', JSON.stringify(transactions));
 
-            // Reset fields
+            // इनपुट बॉक्स खाली करें
+            document.getElementById('cryptoSymbol').value = '';
             document.getElementById('cryptoQty').value = '';
             document.getElementById('cryptoPrice').value = '';
             
-            renderAll();
+            fetchLivePrices(); // नया कॉइन आते ही लाइव रेट अपडेट करें
         }
 
-        // Remove Single Transaction Row
         function deleteTransaction(index) {
             if(confirm("इस ट्रांजैक्शन को डिलीट करें?")) {
                 transactions.splice(index, 1);
@@ -190,19 +217,16 @@
             }
         }
 
-        // Save Target Box values instantly dynamically
         function handleTargetChange(sym, val) {
             targetInputs[sym] = parseFloat(val) || 0;
             localStorage.setItem('my_private_crypto_targets', JSON.stringify(targetInputs));
             updateCalculationsOnly();
         }
 
-        // Full UI Render
         function renderAll() {
             const container = document.getElementById('cryptoCardsContainer');
             container.innerHTML = '';
 
-            // Group transactions by token
             let summary = {};
             transactions.forEach(t => {
                 if(!summary[t.sym]) {
@@ -212,21 +236,18 @@
                 summary[t.sym].totalSpent += (t.qty * t.price);
             });
 
-            // If no data
             if(Object.keys(summary).length === 0) {
                 container.innerHTML = `<div class="text-center text-slate-500 py-6 text-sm">पोर्टफोलियो खाली है। नया ट्रांजैक्शन जोड़ें!</div>`;
             }
 
-            // Loop through active tokens
             Object.keys(summary).forEach(sym => {
                 const data = summary[sym];
                 const avgPrice = data.totalSpent / data.totalQty;
                 const livePrice = livePrices[sym] || 0;
                 const currentVal = data.totalQty * livePrice;
                 
-                // Initialize target default if not set
                 if(targetInputs[sym] === undefined) {
-                    targetInputs[sym] = Math.round(avgPrice * 1.5 * 100) / 100; // 1.5x default
+                    targetInputs[sym] = Math.round(avgPrice * 1.5 * 100) / 100;
                 }
 
                 const cardHtml = `
@@ -235,7 +256,7 @@
                             <span class="text-base font-black text-emerald-400 tracking-wider">${sym}</span>
                             <div class="text-right">
                                 <span class="text-[10px] text-slate-400 font-bold uppercase block">Live Price</span>
-                                <span class="text-sm font-bold text-slate-200">$${livePrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+                                <span class="text-sm font-bold text-slate-200">${livePrice > 0 ? '$' + livePrice.toLocaleString('en-US', {minimumFractionDigits: 2}) : 'Loading...'}</span>
                             </div>
                         </div>
                         
@@ -262,14 +283,13 @@
                             <span class="text-xs text-amber-400 font-bold">Target Price ($):</span>
                             <input type="number" step="any" value="${targetInputs[sym]}" 
                                 oninput="handleTargetChange('${sym}', this.value)"
-                                class="target-box-${sym} w-24 bg-slate-800 text-right border border-slate-600 rounded-lg p-1 text-xs font-bold text-white focus:outline-none focus:border-amber-400">
+                                class="w-24 bg-slate-800 text-right border border-slate-600 rounded-lg p-1 text-xs font-bold text-white focus:outline-none focus:border-amber-400">
                         </div>
                     </div>
                 `;
                 container.insertAdjacentHTML('beforeend', cardHtml);
             });
 
-            // Render History
             renderHistory();
             updateCalculationsOnly();
         }
@@ -302,20 +322,17 @@
             histContainer.innerHTML = html;
         }
 
-        // Fast calculations for Realtime updating without full re-rendering
         function updateCalculationsOnly() {
             let totalTargetUsd = 0;
             const usdInrRate = parseFloat(document.getElementById('usdInrRate').value) || 83.50;
             localStorage.setItem('my_private_usd_inr', usdInrRate);
 
-            // Group summary setup
             let summary = {};
             transactions.forEach(t => {
                 if(!summary[t.sym]) summary[t.sym] = 0;
                 summary[t.sym] += t.qty;
             });
 
-            // Calc target sum
             Object.keys(summary).forEach(sym => {
                 const qty = summary[sym];
                 const targetPrice = targetInputs[sym] || 0;
@@ -324,7 +341,6 @@
 
             const totalTargetInr = totalTargetUsd * usdInrRate;
 
-            // Update DOM element displays
             document.getElementById('grandTargetUsd').innerText = `$${totalTargetUsd.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             document.getElementById('grandTargetInr').innerText = `₹${totalTargetInr.toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
         }
@@ -334,7 +350,7 @@
                 localStorage.clear();
                 transactions = [];
                 targetInputs = {};
-                livePrices = { "ADA": 0, "FET": 0, "BTC": 0, "ETH": 0, "SOL": 0 };
+                livePrices = {};
                 renderAll();
             }
         }
